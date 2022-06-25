@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"sync"
 
@@ -25,6 +24,7 @@ var DefaultOption = &Option{
 
 // Server of rpc
 type Server struct {
+	sending sync.Mutex
 }
 
 func NewServer() *Server {
@@ -36,15 +36,14 @@ func (s *Server) Accept(listener net.Listener) {
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Errorf("accept conn err: %s", err)
-			return
+			continue
 		}
+		// 一个新的连接
 		go s.ServeConn(conn)
 	}
 }
 
 func (s *Server) ServeConn(conn net.Conn) {
-	defer func() { _ = conn.Close() }()
-
 	var opt Option
 	if err := jsoniter.NewDecoder(conn).Decode(&opt); err != nil {
 		log.Errorf("decode option err: %s", err)
@@ -61,29 +60,24 @@ func (s *Server) ServeConn(conn net.Conn) {
 		log.Error("invalid codec type")
 		return
 	}
-	s.serveCodec(f(conn))
+	cc := f(conn)
+	defer cc.Close()
+
+	s.serveCodec(cc)
 }
 
-var invalidRequest = struct{}{}
-
 func (s *Server) serveCodec(cc codec.Codec) {
-	sending := sync.Mutex{}
-	wg := sync.WaitGroup{}
 	for {
+		// 读取请求
 		req, err := s.readRequest(cc)
 		if err != nil {
-			if req == nil {
-				break
-			}
 			req.h.Error = err.Error()
-			s.sendResponse(cc, req.h, invalidRequest, &sending)
+			// err response
+			s.sendResponse(cc, req.h, nil)
 			continue
 		}
-		wg.Add(1)
-		go s.handleRequest(cc, req, &sending, &wg)
+		go s.handleRequest(cc, req)
 	}
-	wg.Wait()
-	_ = cc.Close()
 }
 
 type request struct {
@@ -95,11 +89,10 @@ type request struct {
 func (s *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 	var h codec.Header
 	if err := cc.ReadeHeader(&h); err != nil {
-		if err != io.EOF && err != io.ErrUnexpectedEOF {
-			log.Errorf("read header err: %s", err)
-		}
+		log.Errorf("read header err: %s", err)
 		return nil, err
 	}
+
 	return &h, nil
 }
 
@@ -112,28 +105,25 @@ func (s *Server) readRequest(cc codec.Codec) (*request, error) {
 	req := &request{h: h}
 	if err = cc.ReadBody(&req.argv); err != nil {
 		log.Errorf("read request argv err: %s", err)
+		return nil, fmt.Errorf("read request body err: %s", err)
 	}
 
 	return req, nil
 }
 
-func (s *Server) sendResponse(cc codec.Codec, h *codec.Header,
-	body interface{}, sending *sync.Mutex) {
-	sending.Lock()
-	defer sending.Unlock()
+func (s *Server) handleRequest(cc codec.Codec, req *request) {
+	log.Infof("handle request: %+v, %+v", req.h, req.argv)
+	req.reply = fmt.Sprintf("resp: %d", req.h.Seq)
+	s.sendResponse(cc, req.h, req.reply)
+}
+
+func (s *Server) sendResponse(cc codec.Codec, h *codec.Header, body any) {
+	s.sending.Lock()
+	defer s.sending.Unlock()
 
 	if err := cc.Write(h, body); err != nil {
 		log.Errorf("write response err: %s", err)
 	}
-}
-
-func (s *Server) handleRequest(cc codec.Codec, req *request,
-	sending *sync.Mutex, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	log.Infof("handle request: %+v, %+v", req.h, req.argv)
-	req.reply = fmt.Sprintf("resp: %d", req.h.Seq)
-	s.sendResponse(cc, req.h, req.reply, sending)
 }
 
 var DefaultServer = NewServer()

@@ -32,7 +32,7 @@ type Client struct {
 	header   codec.Header
 	mu       sync.Mutex
 	seq      uint64
-	pending  map[uint64]*Call
+	pending  map[uint64]*Call // 已发出的请求
 	closing  bool
 	shutdown bool
 }
@@ -84,10 +84,11 @@ func (c *Client) removeCall(seq uint64) *Call {
 }
 
 func (c *Client) terminateCalls(err error) {
-	c.sending.Lock()
-	defer c.sending.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	c.sending.Lock()
+	defer c.sending.Unlock()
 
 	c.shutdown = true
 	for _, call := range c.pending {
@@ -124,23 +125,27 @@ func (c *Client) receive() {
 }
 
 func (c *Client) send(call *Call) {
+	// 如果是发送请求，那么 sending 加锁
 	c.sending.Lock()
 	defer c.sending.Unlock()
 
+	// 注册调用
 	seq, err := c.registerCall(call)
 	if err != nil {
 		call.Error = err
-		call.done()
+		call.done() // 完成
 		return
 	}
 
+	log.Infof("send call, %s - %d", call.ServiceMethod, call.Seq)
 	c.header.ServiceMethod = call.ServiceMethod
 	c.header.Seq = seq
 	c.header.Error = ""
 
-	if err = c.cc.Write(&c.header, call.Args); err != nil {
-		call = c.removeCall(seq)
+	if err = c.cc.Write(&c.header, &call.Args); err != nil {
+		log.Errorf("write call body err: %s", err)
 
+		call = c.removeCall(seq)
 		if call != nil {
 			call.Error = err
 			call.done()
@@ -150,9 +155,7 @@ func (c *Client) send(call *Call) {
 
 func (c *Client) Go(serviceMethod string, args, reply any, done chan *Call) *Call {
 	if done == nil {
-		done = make(chan *Call, 10)
-	} else if cap(done) == 0 {
-		log.Fatalf("unbuffered done channel")
+		done = make(chan *Call, 1)
 	}
 
 	call := &Call{
@@ -161,6 +164,7 @@ func (c *Client) Go(serviceMethod string, args, reply any, done chan *Call) *Cal
 		Reply:         reply,
 		Done:          done,
 	}
+	// 发送请求
 	c.send(call)
 
 	return call
@@ -195,7 +199,7 @@ func newClientCodec(cc codec.Codec, opt *Option) *Client {
 		seq:     1,
 		pending: map[uint64]*Call{},
 	}
-	go client.receive()
+	go client.receive() // 处理 call
 
 	return client
 }
@@ -227,10 +231,6 @@ func Dial(network, address string, opts ...*Option) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial net err: %s", err)
 	}
-
-	defer func() {
-		_ = conn.Close()
-	}()
 
 	return NewClient(conn, opt)
 }

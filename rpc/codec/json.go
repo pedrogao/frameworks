@@ -40,12 +40,7 @@ func (c *JsonCodec) ReadBody(body any) error {
 }
 
 func (c *JsonCodec) Write(header *Header, body any) (err error) {
-	defer func() {
-		_ = c.buf.Flush()
-		if err != nil {
-			_ = c.Close()
-		}
-	}()
+	defer c.buf.Flush()
 
 	if err = c.enc.Encode(header); err != nil {
 		log.Errorf("rpc codec: json encoding header err: %s", err)

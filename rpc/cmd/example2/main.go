@@ -30,9 +30,7 @@ func main() {
 		log.Fatalf("rpc dial err: %s", err)
 	}
 
-	defer func() {
-		client.Close()
-	}()
+	defer client.Close()
 
 	time.Sleep(time.Second)
 
@@ -48,7 +46,7 @@ func main() {
 			if err = client.Call("Foo.Sum", args, &reply); err != nil {
 				log.Errorf("call Foo.Sum err: %s", err)
 			} else {
-				log.Infof("reply: %s", reply)
+				log.Infof("req: %s, reply: %s", args, reply)
 			}
 		}(i)
 	}

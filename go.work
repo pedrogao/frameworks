@@ -1,0 +1,8 @@
+go 1.18
+
+use ./hello
+use ./log
+use ./rpc
+use ./orm
+use ./web
+

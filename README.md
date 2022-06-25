@@ -4,10 +4,10 @@
 
 ## modules
 
--[log](./log) simple & easy-use logger library
--[orm](./orm) tiny orm framework for go
--[rpc](./rpc) tiny rpc framework for go
--[web](./web) simple & easy-use web framework for gp
+-[log](./log) simple & easy-use logger library  
+-[orm](./orm) tiny orm framework for go  
+-[rpc](./rpc) tiny rpc framework for go  
+-[web](./web) simple & easy-use web framework for go  
 
 ## example
 

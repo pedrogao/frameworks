@@ -6,4 +6,5 @@ use ./rpc
 use ./orm
 use ./web
 use ./net
+use ./storage
 

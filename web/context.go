@@ -53,7 +53,7 @@ func (c *Context) Stringf(code int, format string, values ...any) {
 	c.Writer.Write([]byte(fmt.Sprintf(format, values...)))
 }
 
-func (c *Context) JSON(code int, obj interface{}) {
+func (c *Context) JSON(code int, obj any) {
 	c.SetHeader("Content-Type", "application/json")
 	c.Status(code)
 	encoder := jsoniter.NewEncoder(c.Writer)

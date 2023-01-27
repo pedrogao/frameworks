@@ -7,12 +7,12 @@ import (
 
 type DB struct {
 	rwlock sync.RWMutex // Allows only one writer at a time
-	*dal
+	*diskManager
 }
 
 func Open(path string, options *Options) (*DB, error) {
 	options.pageSize = os.Getpagesize()
-	dal, err := newDal(path, options)
+	dal, err := newDiskManager(path, options)
 	if err != nil {
 		return nil, err
 	}

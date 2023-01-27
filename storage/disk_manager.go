@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"errors"
 	"fmt"
 	"os"
 )
@@ -20,23 +19,24 @@ var DefaultOptions = &Options{
 	MaxFillPercent: 0.95,
 }
 
+// page of disk
 type page struct {
 	num  pgnum
 	data []byte
 }
 
-type dal struct {
+type diskManager struct {
 	pageSize       int
 	minFillPercent float32
 	maxFillPercent float32
 	file           *os.File
 
-	*meta
-	*freelist
+	*meta     // meta data
+	*freelist // free list
 }
 
-func newDal(path string, options *Options) (*dal, error) {
-	dal := &dal{
+func newDiskManager(path string, options *Options) (*diskManager, error) {
+	dm := &diskManager{
 		meta:           newEmptyMeta(),
 		pageSize:       options.pageSize,
 		minFillPercent: options.MinFillPercent,
@@ -44,58 +44,66 @@ func newDal(path string, options *Options) (*dal, error) {
 	}
 
 	// exist
-	if _, err := os.Stat(path); err == nil {
-		dal.file, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
-		if err != nil {
-			_ = dal.close()
-			return nil, err
-		}
-
-		meta, err := dal.readMeta()
-		if err != nil {
-			return nil, err
-		}
-		dal.meta = meta
-
-		freelist, err := dal.readFreelist()
-		if err != nil {
-			return nil, err
-		}
-		dal.freelist = freelist
-		// doesn't exist
-	} else if errors.Is(err, os.ErrNotExist) {
+	_, err := os.Stat(path)
+	switch {
+	case err != nil && os.IsNotExist(err):
 		// init freelist
-		dal.file, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
+		dm.file, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
 		if err != nil {
-			_ = dal.close()
+			_ = dm.close()
 			return nil, err
 		}
 
-		dal.freelist = newFreelist()
-		dal.freelistPage = dal.getNextPage()
-		_, err := dal.writeFreelist()
+		dm.freelist = newFreelist()        // create freelist
+		dm.freelistPage = dm.getNextPage() // allocate freelist page
+		_, err := dm.writeFreelist()       // flush disk
 		if err != nil {
+			_ = dm.close()
 			return nil, err
 		}
 
-		// init root
-		collectionsNode, err := dal.writeNode(NewNodeForSerialization([]*Item{}, []pgnum{}))
+		// init root node
+		collectionsNode, err := dm.writeNode(NewNodeForSerialization([]*Item{}, []pgnum{}))
 		if err != nil {
+			_ = dm.close()
 			return nil, err
 		}
-		dal.root = collectionsNode.pageNum
-
-		// write meta page
-		_, err = dal.writeMeta(dal.meta) // other error
-	} else {
+		dm.root = collectionsNode.pageNum // set root node page
+		_, err = dm.writeMeta(dm.meta)    // write meta page
+		if err != nil {
+			_ = dm.close()
+			return nil, err
+		}
+	case err != nil && !os.IsNotExist(err):
 		return nil, err
+	default:
+		dm.file, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
+		if err != nil {
+			_ = dm.close()
+			return nil, err
+		}
+
+		meta, err := dm.readMeta()
+		if err != nil {
+			_ = dm.close()
+			return nil, err
+		}
+		dm.meta = meta
+
+		freelist, err := dm.readFreelist()
+		if err != nil {
+			_ = dm.close()
+			return nil, err
+		}
+		dm.freelist = freelist
 	}
-	return dal, nil
+
+	return dm, nil
 }
 
 // getSplitIndex should be called when performing rebalance after an item is removed. It checks if a node can spare an
 // element, and if it does then it returns the index when there the split should happen. Otherwise -1 is returned.
-func (d *dal) getSplitIndex(node *Node) int {
+func (d *diskManager) getSplitIndex(node *Node) int {
 	size := 0
 	size += nodeHeaderSize
 
@@ -112,23 +120,23 @@ func (d *dal) getSplitIndex(node *Node) int {
 	return -1
 }
 
-func (d *dal) maxThreshold() float32 {
+func (d *diskManager) maxThreshold() float32 {
 	return d.maxFillPercent * float32(d.pageSize)
 }
 
-func (d *dal) isOverPopulated(node *Node) bool {
+func (d *diskManager) isOverPopulated(node *Node) bool {
 	return float32(node.nodeSize()) > d.maxThreshold()
 }
 
-func (d *dal) minThreshold() float32 {
+func (d *diskManager) minThreshold() float32 {
 	return d.minFillPercent * float32(d.pageSize)
 }
 
-func (d *dal) isUnderPopulated(node *Node) bool {
+func (d *diskManager) isUnderPopulated(node *Node) bool {
 	return float32(node.nodeSize()) < d.minThreshold()
 }
 
-func (d *dal) close() error {
+func (d *diskManager) close() error {
 	if d.file != nil {
 		err := d.file.Close()
 		if err != nil {
@@ -140,13 +148,13 @@ func (d *dal) close() error {
 	return nil
 }
 
-func (d *dal) allocateEmptyPage() *page {
+func (d *diskManager) allocateEmptyPage() *page {
 	return &page{
-		data: make([]byte, d.pageSize, d.pageSize),
+		data: make([]byte, d.pageSize),
 	}
 }
 
-func (d *dal) readPage(pageNum pgnum) (*page, error) {
+func (d *diskManager) readPage(pageNum pgnum) (*page, error) {
 	p := d.allocateEmptyPage()
 
 	offset := int(pageNum) * d.pageSize
@@ -157,13 +165,13 @@ func (d *dal) readPage(pageNum pgnum) (*page, error) {
 	return p, err
 }
 
-func (d *dal) writePage(p *page) error {
+func (d *diskManager) writePage(p *page) error {
 	offset := int64(p.num) * int64(d.pageSize)
 	_, err := d.file.WriteAt(p.data, offset)
 	return err
 }
 
-func (d *dal) getNode(pageNum pgnum) (*Node, error) {
+func (d *diskManager) getNode(pageNum pgnum) (*Node, error) {
 	p, err := d.readPage(pageNum)
 	if err != nil {
 		return nil, err
@@ -174,7 +182,7 @@ func (d *dal) getNode(pageNum pgnum) (*Node, error) {
 	return node, nil
 }
 
-func (d *dal) writeNode(n *Node) (*Node, error) {
+func (d *diskManager) writeNode(n *Node) (*Node, error) {
 	p := d.allocateEmptyPage()
 	if n.pageNum == 0 {
 		p.num = d.getNextPage()
@@ -192,11 +200,11 @@ func (d *dal) writeNode(n *Node) (*Node, error) {
 	return n, nil
 }
 
-func (d *dal) deleteNode(pageNum pgnum) {
+func (d *diskManager) deleteNode(pageNum pgnum) {
 	d.releasePage(pageNum)
 }
 
-func (d *dal) readFreelist() (*freelist, error) {
+func (d *diskManager) readFreelist() (*freelist, error) {
 	p, err := d.readPage(d.freelistPage)
 	if err != nil {
 		return nil, err
@@ -207,7 +215,7 @@ func (d *dal) readFreelist() (*freelist, error) {
 	return freelist, nil
 }
 
-func (d *dal) writeFreelist() (*page, error) {
+func (d *diskManager) writeFreelist() (*page, error) {
 	p := d.allocateEmptyPage()
 	p.num = d.freelistPage
 	d.freelist.serialize(p.data)
@@ -220,7 +228,7 @@ func (d *dal) writeFreelist() (*page, error) {
 	return p, nil
 }
 
-func (d *dal) writeMeta(meta *meta) (*page, error) {
+func (d *diskManager) writeMeta(meta *meta) (*page, error) {
 	p := d.allocateEmptyPage()
 	p.num = metaPageNum
 	meta.serialize(p.data)
@@ -232,7 +240,7 @@ func (d *dal) writeMeta(meta *meta) (*page, error) {
 	return p, nil
 }
 
-func (d *dal) readMeta() (*meta, error) {
+func (d *diskManager) readMeta() (*meta, error) {
 	p, err := d.readPage(metaPageNum)
 	if err != nil {
 		return nil, err

@@ -5,20 +5,29 @@ import (
 	"encoding/binary"
 )
 
+//
+// node in b-tree, includes leaf nodes & internal nodes
+//
+
+// Item of leaf node
 type Item struct {
 	Key   []byte
 	Value []byte
 }
 
+// Node of B-tree
 type Node struct {
 	// associated transaction
 	tx *tx
-
-	pageNum    pgnum
-	items      []*Item
+	// associate page number
+	pageNum pgnum
+	// leaf node items
+	items []*Item
+	// internal node items, pointer to children node
 	childNodes []pgnum
 }
 
+// NewEmptyNode return an empty b-tree node
 func NewEmptyNode() *Node {
 	return &Node{}
 }
@@ -292,11 +301,12 @@ func (n *Node) addItem(item *Item, insertionIndex int) int {
 // is depicted in the graph below. If it's not a leaf node, then the children has to be moved as well as shown.
 // This may leave the parent unbalanced by having too many items so rebalancing has to be checked for all the ancestors.
 // The split is performed in a for loop to support splitting a node more than once. (Though in practice used only once).
-// 	           n                                        n
-//                 3                                       3,6
-//	      /        \           ------>       /          |          \
-//	   a           modifiedNode            a       modifiedNode     newNode
-//   1,2                 4,5,6,7,8            1,2          4,5         7,8
+//
+//		           n                                        n
+//	                3                                       3,6
+//		      /        \           ------>       /          |          \
+//		   a           modifiedNode            a       modifiedNode     newNode
+//	  1,2                 4,5,6,7,8            1,2          4,5         7,8
 func (n *Node) split(nodeToSplit *Node, nodeToSplitIndex int) {
 	// The first index where min amount of bytes to populate a page is achieved. Then add 1 so it will be split one
 	// index after.

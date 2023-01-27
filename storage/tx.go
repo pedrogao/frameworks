@@ -1,17 +1,20 @@
 package storage
 
+// tx transaction implement based page
 type tx struct {
-	dirtyNodes    map[pgnum]*Node
+	// dirty b-tree nodes
+	dirtyNodes map[pgnum]*Node
+	// pages will delete when tx commit
 	pagesToDelete []pgnum
-
 	// new pages allocated during the transaction. They will be released if rollback is called.
 	allocatedPageNums []pgnum
-
+	// write or read mode
 	write bool
-
+	// associate db instance
 	db *DB
 }
 
+// newTx create transaction underlying db with write mode or not
 func newTx(db *DB, write bool) *tx {
 	return &tx{
 		map[pgnum]*Node{},

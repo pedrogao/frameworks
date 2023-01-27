@@ -2,13 +2,18 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/pedrogao/storage"
 )
 
 func main() {
-	db, _ := storage.Open("Demo7",
+	db, err := storage.Open("Demo7",
 		&storage.Options{MinFillPercent: 0.5, MaxFillPercent: 1.0})
+
+	if err != nil {
+		log.Fatalf("open storage err: %v", err)
+	}
 
 	tx := db.WriteTx()
 	collectionName := "Demo7Collection"

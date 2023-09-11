@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/pedrogao/log"
 	"github.com/pedrogao/net"
@@ -32,4 +35,15 @@ func main() {
 		}
 		s.Close()
 	})
+
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		eventLoop.Quit()
+
+		os.Exit(1)
+	}()
+
+	eventLoop.Loop()
 }
